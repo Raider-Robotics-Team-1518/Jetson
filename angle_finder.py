@@ -8,8 +8,6 @@ import argparse
 import cv2
 import math
 import numpy as np
-import os
-import sys
 
 import robovision as rv
 
@@ -20,8 +18,6 @@ tape_angle = 14.0  # degrees
 tape_separation_distance = 8.0  # distance between tape points in inches
 fl = 840     # perceived focal length calculated with distance_calibration.py
 last_known_distance = 500  # start assuming target is far away
-
-{'center_x': 320.0, 'p2': 1.4e-05, 'k1': -5e-07, 'p1': 8.5e-05, 'center_y': 240.0, 'fl': 8, 'k2': 0.0}
 
 dist_coeff = np.zeros((4, 1), np.float64)
 dist_coeff[0, 0] = -5e-07
@@ -65,15 +61,13 @@ def main():
         frame = rv.flatten(frame, cam_matrix, dist_coeff)
         target.set_color_range(lower=(lower, 100, 100), upper=(upper, 255, 255))
         contours = target.get_contours(frame)
-        angle_factor = 0
         if len(contours) > 1:
             contours, _ = sort_contours(contours, method="left-to-right")
             left_contour = None
             right_contour = None
             left_angle = 0
             right_angle = 0
-            left_center = (0,0)
-            right_center = (0,0)
+            left_center = (0, 0)
             for cnt in contours:
                 angle = target.get_skew_angle(cnt)
                 rect = cv2.minAreaRect(cnt)
@@ -83,7 +77,11 @@ def main():
                     left_angle = angle
                     left_center = center
                     print("left_center: {}".format(left_center))
-                elif right_contour is None and angle < 0 and left_center[0] < center[0] and math.isclose(angle, -tape_angle, abs_tol=tolerance):
+                elif left_contour is not None and \
+                        right_contour is None and \
+                        angle < 0 and \
+                        left_center[0] < center[0] and \
+                        math.isclose(angle, -tape_angle, abs_tol=tolerance):
                     right_contour = cnt
                     right_angle = angle
                     print("right_center: {}".format(center))
@@ -121,16 +119,8 @@ def sort_contours(contours, method="left-to-right"):
     if method == "top-bottom" or method == "bottom-to-top":
         i = 1
     bounding_boxes = [cv2.boundingRect(c) for c in contours]
-    (contours, boundingBoxes) = zip(*sorted(zip(contours, bounding_boxes), key=lambda b:b[1][i], reverse=reverse))
+    (contours, boundingBoxes) = zip(*sorted(zip(contours, bounding_boxes), key=lambda b: b[1][i], reverse=reverse))
     return contours, bounding_boxes
-
-
-class Object(object):
-    """
-    An empty, generic object constructor required for de-pickling
-    the camera parameters file
-    """
-    pass
 
 
 if __name__ == "__main__":
