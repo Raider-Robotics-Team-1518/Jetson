@@ -6,8 +6,8 @@ import cv2
 
 
 def main():
-    cam = open_cam('http://10.15.18.100/mjpg/video.mjpg')
-    # cam = open_cam(1)  # if this doesn't work, try a 0
+    # cam = open_cam('http://10.15.18.100/mjpg/video.mjpg')
+    cam = open_cam(1)  # if this doesn't work, try a 0
     # cam = open_cam('/dev/video1')  # also works, may be /dev/video0
     #cam = open_cam_onboard(1024, 768)  # Use Jetson onboard camera
     if cam.isOpened() is False:
