@@ -10,10 +10,10 @@ import logging
 import math
 import numpy as np
 import robovision as rv
-# from networktables import NetworkTables
+from networktables import NetworkTables
 
 # DEFAULT / STARTING VALUES
-SERVER_ADDRESS = "10.15.18.1"  # IP address of the robot
+SERVER_ADDRESS = "10.15.18.2"  # IP address of the robot
 # I think we could use 'roborio-XXX-frc.local' instead
 LOWER = 60         # HSV lower hue color
 UPPER = 100        # HSV upper hue color
@@ -38,8 +38,8 @@ cam_matrix[1, 1] = 8   # define focal length y
 
 # GLOBAL OBJECT CONFIGURATIONS
 logging.basicConfig(level=logging.DEBUG)  # needed to get logging info from NetworkTables
-# NetworkTables.initialize(server=SERVER_ADDRESS)
-# nettable = NetworkTables.getTable("jetson")
+NetworkTables.initialize(server=SERVER_ADDRESS)
+nettable = NetworkTables.getTable("SmartDashboard")
 target = rv.Target()
 target.set_color_range(lower=(LOWER, 100, 100), upper=(UPPER, 255, 255))
 
@@ -67,19 +67,18 @@ def main():
                                                                      show_preview=True)
         print(target_in_view)
         distance_deck.push(distance)
-        print(distance_deck.average(precision=1))
+        avg_distance = distance_deck.average(precision=1)
+        print(avg_distance)
         l_angle_deck.push(lr_angle[0])
         r_angle_deck.push(lr_angle[1])
         print("L: {}, R: {}".format(l_angle_deck.average(precision=3), r_angle_deck.average(precision=3)))
-        # if target_in_view:
-        #     # write to network tables
-        #     nettable.putBoolean("in_view", True)
-        #     nettable.putNumber("distance", distance)
-        #     nettable.putNumber("angle", angle)
-        # else:
-        #     nettable.putBoolean("in_view", False)
-        #     nettable.putNumber("distance", -1)
-        #     nettable.putNumber("angle", 0)
+        if target_in_view:
+            # write to network tables
+            nettable.putNumber("distance", avg_distance)
+            nettable.putNumber("angle", angle)
+        else:
+            nettable.putNumber("distance", -1)
+            nettable.putNumber("angle", 0)
         # wait for Esc or q key and then exit
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
