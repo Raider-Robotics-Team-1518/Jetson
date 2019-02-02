@@ -10,7 +10,7 @@ import logging
 import math
 import numpy as np
 import robovision as rv
-from networktables import NetworkTables
+# from networktables import NetworkTables
 
 # DEFAULT / STARTING VALUES
 SERVER_ADDRESS = "10.15.18.1"  # IP address of the robot
@@ -18,7 +18,8 @@ SERVER_ADDRESS = "10.15.18.1"  # IP address of the robot
 LOWER = 60         # HSV lower hue color
 UPPER = 100        # HSV upper hue color
 TOLERANCE = 4   # angle tolerance, in degrees
-TAPE_ANGLE = 14.0  # degrees
+TAPE_ANGLE = 14.5  # degrees
+ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
 TAPE_SEPARATION_DISTANCE = 8.0  # distance between tape points in inches
 FOCAL_LENGTH = 840     # perceived focal length calculated with distance_calibration.py
 TARGET_ASPECT_RATIO = 0.40  # aspect ratio of tape (2 / 5.5 = 0.36)
@@ -37,8 +38,8 @@ cam_matrix[1, 1] = 8   # define focal length y
 
 # GLOBAL OBJECT CONFIGURATIONS
 logging.basicConfig(level=logging.DEBUG)  # needed to get logging info from NetworkTables
-NetworkTables.initialize(server=SERVER_ADDRESS)
-nettable = NetworkTables.getTable("jetson")
+# NetworkTables.initialize(server=SERVER_ADDRESS)
+# nettable = NetworkTables.getTable("jetson")
 target = rv.Target()
 target.set_color_range(lower=(LOWER, 100, 100), upper=(UPPER, 255, 255))
 
@@ -54,22 +55,31 @@ def main():
     vs = rv.get_video_stream(source)
     vs.start()
     cv2.namedWindow('CapturedImage', cv2.WINDOW_NORMAL)
+    distance_deck = rv.Deck(maxlen=5)
+    l_angle_deck = rv.Deck(maxlen=5)
+    r_angle_deck = rv.Deck(maxlen=5)
     while True:
         frame = vs.read_frame()
         frame = rv.flatten(frame, cam_matrix, dist_coeff)
         contours = target.get_contours(frame)
-        target_in_view, distance, angle = process_contours(contours,
-                                                           frame,
-                                                           show_preview=True)
-        if target_in_view:
-            # write to network tables
-            nettable.putBoolean("in_view", True)
-            nettable.putNumber("distance", distance)
-            nettable.putNumber("angle", angle)
-        else:
-            nettable.putBoolean("in_view", False)
-            nettable.putNumber("distance", -1)
-            nettable.putNumber("angle", 0)
+        target_in_view, distance, angle, lr_angle = process_contours(contours,
+                                                                     frame,
+                                                                     show_preview=True)
+        print(target_in_view)
+        distance_deck.push(distance)
+        print(distance_deck.average(precision=1))
+        l_angle_deck.push(lr_angle[0])
+        r_angle_deck.push(lr_angle[1])
+        print("L: {}, R: {}".format(l_angle_deck.average(precision=3), r_angle_deck.average(precision=3)))
+        # if target_in_view:
+        #     # write to network tables
+        #     nettable.putBoolean("in_view", True)
+        #     nettable.putNumber("distance", distance)
+        #     nettable.putNumber("angle", angle)
+        # else:
+        #     nettable.putBoolean("in_view", False)
+        #     nettable.putNumber("distance", -1)
+        #     nettable.putNumber("angle", 0)
         # wait for Esc or q key and then exit
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
@@ -92,6 +102,8 @@ def process_contours(contours, frame, show_preview=False):
     target_in_view = False
     distance = -1
     angle = 0
+    bot_angle = 0
+    lr_angle = (-1, -1)
     if len(contours) > 1:
         contours, _ = sort_contours(contours, method="left-to-right")
         left_contour = None
@@ -114,7 +126,7 @@ def process_contours(contours, frame, show_preview=False):
             center = rect[0]
             if left_contour is None and math.isclose(angle, TAPE_ANGLE, abs_tol=TOLERANCE):
                 left_contour = cnt
-                left_angle = angle
+                left_angle = angle + ANGLE_ADJUSTMENT
                 left_center = center
             elif left_contour is not None and \
                     right_contour is None and \
@@ -122,7 +134,7 @@ def process_contours(contours, frame, show_preview=False):
                     left_center[0] < center[0] and \
                     math.isclose(angle, -TAPE_ANGLE, abs_tol=TOLERANCE):
                 right_contour = cnt
-                right_angle = angle
+                right_angle = angle - ANGLE_ADJUSTMENT
         if left_contour is not None and \
                 right_contour is not None and \
                 math.isclose(left_angle + abs(right_angle), TAPE_ANGLE * 2, abs_tol=TOLERANCE):
@@ -132,10 +144,12 @@ def process_contours(contours, frame, show_preview=False):
             point_spacing = right_leftmost[0] - left_rightmost[0]
             # Distance from formula: D’ = (W x F) / P
             distance = TAPE_SEPARATION_DISTANCE * FOCAL_LENGTH / point_spacing
-            angle = estimate_robot_angle(left_angle, right_angle)
-            if show_preview:
-                show_preview_window(frame, left_contour, right_contour)
-    return target_in_view, distance, angle
+            bot_angle = estimate_robot_angle(left_angle, right_angle)
+            lr_angle = (left_angle, right_angle)
+        if show_preview:
+            show_preview_window(frame, left_contour, right_contour)
+
+    return target_in_view, distance, bot_angle, lr_angle
 
 
 def estimate_robot_angle(left_angle, right_angle):
@@ -178,8 +192,10 @@ def show_preview_window(frame, left_contour, right_contour):
     :param left_contour: single contour, associated with left target
     :param right_contour: single contour, associated with right target
     """
-    cv2.drawContours(frame, [left_contour], -1, (0, 0, 255), 3)
-    cv2.drawContours(frame, [right_contour], -1, (0, 255, 0), 3)
+    if left_contour is not None:
+        cv2.drawContours(frame, [left_contour], -1, (0, 0, 255), 3)
+    if right_contour is not None:
+        cv2.drawContours(frame, [right_contour], -1, (255, 0, 0), 3)
     cv2.imshow('CapturedImage', frame)
 
 
