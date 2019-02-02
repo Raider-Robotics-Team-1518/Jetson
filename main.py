@@ -1,5 +1,5 @@
 """
-Gets the tape angles and uses that to calculate distance to the targets
+Locate the targets, calculates the distance and offset
 
 Note that the camera will be mounted 11.25" back from the front of the camera
 (including the bumpers).
@@ -17,12 +17,14 @@ SERVER_ADDRESS = "10.15.18.2"  # IP address of the robot
 # I think we could use 'roborio-XXX-frc.local' instead
 LOWER = 60         # HSV lower hue color
 UPPER = 100        # HSV upper hue color
-TOLERANCE = 10   # angle tolerance, in degrees
+TOLERANCE = 5   # angle tolerance, in degrees
 TAPE_ANGLE = 14.5  # degrees
 ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
-TAPE_SEPARATION_DISTANCE = 8.0  # distance between tape points in inches
-FOCAL_LENGTH = 665     # perceived focal length calculated with distance_calibration.py
+TAPE_HEIGHT = 8.0  # distance between tape points in inches
+FOCAL_LENGTH = 681     # perceived focal length calculated with distance_calibration.py
 TARGET_ASPECT_RATIO = 0.40  # aspect ratio of tape (2 / 5.5 = 0.36)
+FOV = 67
+CAMERA_SETBACK = 22.5  # how far back the camera is mounted
 
 # CAMERA/LENS PARAMETERS FOR FIELD FLATTENING
 dist_coeff = np.zeros((4, 1), np.float64)
@@ -57,28 +59,30 @@ def main():
     vs.start()
     cv2.namedWindow('CapturedImage', cv2.WINDOW_NORMAL)
     distance_deck = rv.Deck(maxlen=5)
-    l_angle_deck = rv.Deck(maxlen=5)
-    r_angle_deck = rv.Deck(maxlen=5)
+    offset_deck = rv.Deck(maxlen=5)
+
     while True:
         frame = vs.read_frame()
         frame = rv.flatten(frame, cam_matrix, dist_coeff)
         contours = target.get_contours(frame)
-        target_in_view, distance, angle, lr_angle = process_contours(contours,
-                                                                     frame,
-                                                                     show_preview=True)
+        target_in_view, distance, offset = process_contours(contours,
+                                                            frame,
+                                                            show_preview=True)
         distance_deck.push(distance)
+        offset_deck.push(offset)
         avg_distance = distance_deck.average(precision=1)
+        avg_offset = offset_deck.average(precision=3)
         print("Distance: {}".format(avg_distance))
-        l_angle_deck.push(lr_angle[0])
-        r_angle_deck.push(lr_angle[1])
-        print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
+        # l_angle_deck.push(lr_angle[0])
+        # r_angle_deck.push(lr_angle[1])
+        # print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
         if target_in_view:
             # write to network tables
             nettable.putNumber("distance", avg_distance)
-            nettable.putNumber("angle", angle)
+            nettable.putNumber("offset", avg_offset)
         else:
             nettable.putNumber("distance", -1)
-            nettable.putNumber("angle", 0)
+            nettable.putNumber("offset", 0)
         # wait for Esc or q key and then exit
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
@@ -100,9 +104,7 @@ def process_contours(contours, frame, show_preview=False):
     """
     target_in_view = False
     distance = -1
-    angle = 0
-    bot_angle = 0
-    lr_angle = (-1, -1)
+    display_distance = 0
     if len(contours) > 1:
         contours, _ = sort_contours(contours, method="left-to-right")
         left_contour = None
@@ -142,24 +144,31 @@ def process_contours(contours, frame, show_preview=False):
             _, _, right_leftmost, _ = target.get_extreme_points(right_contour)
             point_spacing = right_leftmost[0] - left_rightmost[0]
             # Distance from formula: D’ = (W x F) / P
-            distance = TAPE_SEPARATION_DISTANCE * FOCAL_LENGTH / point_spacing
-            bot_angle = estimate_robot_angle(left_angle, right_angle)
-            lr_angle = (left_angle, right_angle)
+            distance = (TAPE_HEIGHT * FOCAL_LENGTH / point_spacing)
+            display_distance = distance - CAMERA_SETBACK
+            px_per_inch = (5801 / 12) / distance
+            dist = point_spacing / 2
+            pmid = right_leftmost[0] - dist
+            diff = 320 - pmid
+            print("pixel difference", diff, 'px_per_inch', px_per_inch)
+            offset = diff / px_per_inch / 1.2
+
+            if distance > 0:
+                # inches = ((np.log(23.75-diff))/(np.log(0.9714))) * 0.0305
+                if diff < -5:
+                    print("shift to the right", offset, "inches")
+                elif diff > 5:
+                    print("shift to the left", offset, "inches")
+                else:
+                    print("you have reached the unattainable center")
+            else:
+                print("you have reached ground zero")
+
+            # lr_angle = (left_angle, right_angle)
         if show_preview:
             show_preview_window(frame, left_contour, right_contour)
 
-    return target_in_view, distance, bot_angle, lr_angle
-
-
-def estimate_robot_angle(left_angle, right_angle):
-    """
-    Estimate the angle at which the robot is facing the targets
-
-    :param left_angle: Apparent angle of the left target tape
-    :param right_angle: Apparent angle of the right target tape
-    :return: angle (robot angle to targets, degrees)
-    """
-    return 0
+    return target_in_view, display_distance, offset
 
 
 def sort_contours(contours, method="left-to-right"):
@@ -194,7 +203,7 @@ def show_preview_window(frame, left_contour, right_contour):
     if left_contour is not None:
         cv2.drawContours(frame, [left_contour], -1, (0, 0, 255), 3)
     if right_contour is not None:
-        cv2.drawContours(frame, [right_contour], -1, (255, 0, 0), 3)
+        cv2.drawContours(frame, [right_contour], -1, (0, 0, 255), 3)
     cv2.imshow('CapturedImage', frame)
 
 

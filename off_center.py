@@ -20,7 +20,7 @@ UPPER = 100        # HSV upper hue color
 TOLERANCE = 5   # angle tolerance, in degrees
 TAPE_ANGLE = 14.5  # degrees
 ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
-TAPE_SEPARATION_DISTANCE = 8.0  # distance between tape points in inches
+TAPE_HEIGHT = 8.0  # distance between tape points in inches
 FOCAL_LENGTH = 681     # perceived focal length calculated with distance_calibration.py
 TARGET_ASPECT_RATIO = 0.40  # aspect ratio of tape (2 / 5.5 = 0.36)
 FOV = 67
@@ -45,9 +45,6 @@ nettable = NetworkTables.getTable("SmartDashboard")
 target = rv.Target()
 target.set_color_range(lower=(LOWER, 100, 100), upper=(UPPER, 255, 255))
 
-distance_table = [12.7, 15.2, 18.1, 23.9, 30.0, 35.8, 43.0, 49.7]
-pixel_table = [37.833333333333336, 31.25, 26.583333333333332, 20.083333333333332, 16.0, 13.416666666666666, 11.166666666666666, 9.666666666666666]
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -61,28 +58,30 @@ def main():
     vs.start()
     cv2.namedWindow('CapturedImage', cv2.WINDOW_NORMAL)
     distance_deck = rv.Deck(maxlen=5)
-    l_angle_deck = rv.Deck(maxlen=5)
-    r_angle_deck = rv.Deck(maxlen=5)
+    offset_deck = rv.Deck(maxlen=5)
+
     while True:
         frame = vs.read_frame()
-        # frame = rv.flatten(frame, cam_matrix, dist_coeff)
+        frame = rv.flatten(frame, cam_matrix, dist_coeff)
         contours = target.get_contours(frame)
-        target_in_view, distance, angle, lr_angle = process_contours(contours,
-                                                                     frame,
-                                                                     show_preview=True)
+        target_in_view, distance, offset = process_contours(contours,
+                                                            frame,
+                                                            show_preview=True)
         distance_deck.push(distance)
+        offset_deck.push(offset)
         avg_distance = distance_deck.average(precision=1)
+        avg_offset = offset_deck.average(precision=3)
         print("Distance: {}".format(avg_distance))
-        l_angle_deck.push(lr_angle[0])
-        r_angle_deck.push(lr_angle[1])
-        print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
+        # l_angle_deck.push(lr_angle[0])
+        # r_angle_deck.push(lr_angle[1])
+        # print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
         if target_in_view:
             # write to network tables
             nettable.putNumber("distance", avg_distance)
-            nettable.putNumber("angle", angle)
+            nettable.putNumber("offset", avg_offset)
         else:
             nettable.putNumber("distance", -1)
-            nettable.putNumber("angle", 0)
+            nettable.putNumber("offset", 0)
         # wait for Esc or q key and then exit
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
@@ -147,58 +146,31 @@ def process_contours(contours, frame, show_preview=False):
             _, _, right_leftmost, _ = target.get_extreme_points(right_contour)
             point_spacing = right_leftmost[0] - left_rightmost[0]
             # Distance from formula: D’ = (W x F) / P
-            distance = (TAPE_SEPARATION_DISTANCE * FOCAL_LENGTH / point_spacing)
+            distance = (TAPE_HEIGHT * FOCAL_LENGTH / point_spacing)
             display_distance = distance - 22.5
-            px_per_inch = get_pixels_per_inch(distance)
-            w = 2 * distance * math.tan(FOV / 2)
-            # if distance <= 0:
-            #     distance = 0
+            px_per_inch = (5801 / 12) / distance
             dist = point_spacing / 2
             pmid = right_leftmost[0] - dist
             diff = 320 - pmid
             print("pixel difference", diff, 'px_per_inch', px_per_inch)
-            inches = diff / px_per_inch / 1.2
+            offset = diff / px_per_inch / 1.2
 
             if distance > 0:
                 # inches = ((np.log(23.75-diff))/(np.log(0.9714))) * 0.0305
                 if diff < -5:
-                    print("shift to the right", inches, "inches")
+                    print("shift to the right", offset, "inches")
                 elif diff > 5:
-                    print("shift to the left", inches, "inches")
+                    print("shift to the left", offset, "inches")
                 else:
                     print("you have reached the unattainable center")
             else:
                 print("you have reached ground zero")
 
-            bot_angle = estimate_robot_angle(left_angle, right_angle)
-            lr_angle = (left_angle, right_angle)
+            # lr_angle = (left_angle, right_angle)
         if show_preview:
             show_preview_window(frame, left_contour, right_contour)
 
-    return target_in_view, display_distance, bot_angle, lr_angle
-
-
-def get_pixels_per_inch(distance):
-    index = 0
-    for i, dist in enumerate(distance_table):
-        if distance < dist:
-            index = i
-            break
-    if index == 0:
-        return pixel_table[0]
-    ratio = (distance - distance_table[index - 1]) / (distance_table[index] - distance_table[index - 1])
-    px_scale = ratio * (pixel_table[index] - pixel_table[index - 1]) + pixel_table[index - 1]
-    return px_scale
-
-def estimate_robot_angle(left_angle, right_angle):
-    """
-    Estimate the angle at which the robot is facing the targets
-
-    :param left_angle: Apparent angle of the left target tape
-    :param right_angle: Apparent angle of the right target tape
-    :return: angle (robot angle to targets, degrees)
-    """
-    return 0
+    return target_in_view, display_distance, offset
 
 
 def sort_contours(contours, method="left-to-right"):
