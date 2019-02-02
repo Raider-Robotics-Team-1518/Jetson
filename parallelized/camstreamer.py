@@ -22,13 +22,13 @@ class Camstreamer(Process):
     def run(self):
         camserver = cs.CameraServer.getInstance()
         camera = cs.UsbCamera(name="lifecam", dev=1)
-        camera.setResolution(320, 240)
+        camera.setResolution(640, 480)
         camserver.addCamera(camera)
 
         inputStream = camserver.getVideo()
-        outputStream = camserver.putVideo("LifeCam", 320, 240)
+        outputStream = camserver.putVideo("LifeCam", 640, 480)
 
-        frame = np.zeros(shape=(240, 320, 3), dtype=np.uint8)
+        frame = np.zeros(shape=(480, 640, 3), dtype=np.uint8)
         while True:
             if self.stop_pipe.poll():
                 # try reading from the stop pipe; if it's not empty
@@ -43,8 +43,10 @@ class Camstreamer(Process):
             # match_started = self.smartdashboard.getNumber("match_started")
             success, frame = inputStream.grabFrame(frame)
             if success:
+                cv2.imshow("LifeCam", frame)
                 try:
                     field_data = self.targeting_queue.get_nowait()
+                    # cv2.rectangle(frame, (100, 100), (200, 200), (0, 0, 255), 4)
                     # use the field data to draw the overlays
                     if field_data.target_in_view is True:
                         if field_data.is_centered is True:
@@ -58,10 +60,10 @@ class Camstreamer(Process):
                             # draw red border and arrow
                             frame = rv.draw_border(frame, (0, 0, 255), thickness=20)
                             frame = rv.draw_arrow(frame, (255, 0, 0), direction=270, thickness=40)
-                    outputStream.putFrame(frame)
                 except Empty:
                     # exception thrown if there's nothing in the queue to read
                     pass
+                outputStream.putFrame(frame)
             cv2.waitKey(1)  # pause for 1 millisecond to not max out the CPU
 
 

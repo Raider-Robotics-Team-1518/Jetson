@@ -28,11 +28,11 @@ import time
 from multiprocessing import Queue, Pipe
 # import our bot-specific classes
 from camstreamer import Camstreamer
-from targeting import Target
+from targeting import Targeting
 
 
 # CONSTANTS
-CAMERA_SOURCE = "http://10.15.18.100/mjpg/video.mjpg"
+CAMERA_SOURCE = "http://10.15.18.11/mjpg/video.mjpg"
 LOWER_HSV = 60
 UPPER_HSV = 100
 stop_pipes = []
@@ -52,11 +52,11 @@ if __name__ == "__main__":
     targeting_queue = Queue()
 
     camstreamer_process = Camstreamer(targeting_queue=targeting_queue, stop_pipe=cs_reader)
-    target_process = Target(targeting_queue=targeting_queue,
-                            stop_pipe=trgt_reader,
-                            source=CAMERA_SOURCE,
-                            lower_hsv=LOWER_HSV,
-                            upper_hsv=UPPER_HSV)
+    target_process = Targeting(targeting_queue=targeting_queue,
+                               stop_pipe=trgt_reader,
+                               source=CAMERA_SOURCE,
+                               lower_hsv=LOWER_HSV,
+                               upper_hsv=UPPER_HSV)
 
     camstreamer_process.start()
     target_process.start()

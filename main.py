@@ -54,7 +54,7 @@ def main():
     args = vars(ap.parse_args())
     source = args["source"]
     if source is None or source == "":
-        source = "http://10.15.18.100/mjpg/video.mjpg"
+        source = "http://10.15.18.11/mjpg/video.mjpg"
     vs = rv.get_video_stream(source)
     vs.start()
     cv2.namedWindow('CapturedImage', cv2.WINDOW_NORMAL)
@@ -105,8 +105,10 @@ def process_contours(contours, frame, show_preview=False):
     target_in_view = False
     distance = -1
     display_distance = 0
+    offset = 0
     if len(contours) > 1:
         contours, _ = sort_contours(contours, method="left-to-right")
+        cv2.drawContours(frame, contours, -1, (0, 0, 255), 3)
         left_contour = None
         right_contour = None
         left_angle = 0

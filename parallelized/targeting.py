@@ -11,6 +11,7 @@ import numpy as np
 import robovision as rv
 from fielddata import FieldData
 from networktables import NetworkTables
+import serial
 
 # DEFAULT / STARTING VALUES
 SERVER_ADDRESS = "10.15.18.2"  # IP address of the robot
@@ -24,6 +25,13 @@ FOV = 67                       # actual camera FOV
 CAMERA_SETBACK = 22.5          # how far back the camera is mounted
 CENTER_TOLERANCE = 10          # tolerance for being centered, in pixels
 DECK_LENGTH = 5                # deque length for rolling average
+
+BLACK = 0
+RED = 1
+BLUE = 2
+YELLOW = 3
+GREEN = 4
+RANDOM = 5
 
 # CAMERA/LENS PARAMETERS FOR FIELD FLATTENING
 dist_coeff = np.zeros((4, 1), np.float64)
@@ -40,18 +48,23 @@ cam_matrix[1, 1] = 2   # define focal length y
 
 
 class Targeting(Process):
-    def __init__(self, targeting_queue=None, stop_pipe=None, source="http://10.15.18.100/mjpg/video.mjpg",
+    def __init__(self, targeting_queue=None, stop_pipe=None, source="http://10.15.18.11/mjpg/video.mjpg",
                  lower_hsv=60, upper_hsv=100):
+        super(Targeting, self).__init__()
         self.targeting_queue = targeting_queue
         self.stop_pipe = stop_pipe
         NetworkTables.initialize(server="10.15.18.2")
-        self.nettable = NetworkTables.getTable("SmartDashboard")
+        self.smart_dashboard = NetworkTables.getTable("SmartDashboard")
+        self.fmsinfo = NetworkTables.getTable("FMSInfo")
         self.distance_deck = rv.Deck(maxlen=5)
         self.offset_deck = rv.Deck(maxlen=5)
-        self.vs = rv.get_video_stream(source)
-        self.vs.start()
+        self.camera = cv2.VideoCapture("http://10.15.18.11/mjpg/video.mjpg")
+        # self.vs = rv.get_video_stream(source)
+        # self.vs.start()
         self.target = rv.Target()
         self.target.set_color_range(lower=(lower_hsv, 100, 100), upper=(upper_hsv, 255, 255))
+        self.ser = serial.Serial('/dev/ttyUSB0')
+        self.ser.flushInput()
 
     def run(self):
         while True:
@@ -63,19 +76,43 @@ class Targeting(Process):
                 if stop == "stop":
                     break
             field_data = FieldData()
-            frame = self.vs.read_frame()
-            frame = rv.flatten(frame, cam_matrix, dist_coeff)
+            # frame = self.vs.read_frame()
+            success, frame = self.camera.read()
+            # if frame is None:
+            #     print('wut?')
+            #     continue
+            if success is False:
+                print('wut?')
+                continue
+            # frame = rv.flatten(frame, cam_matrix, dist_coeff)
             contours = self.target.get_contours(frame)
-            target_in_view, distance, offset, offset_direction = self.process_contours(contours, frame)
+            target_in_view, distance, offset, offset_direction = self.process_contours(contours)
+            is_red_alliance, is_game_started = self.get_field_info()
+
+            if is_game_started:
+                if target_in_view:
+                    if offset_direction == 0:
+                        self.set_colors(GREEN)
+                    else:
+                        self.set_colors(YELLOW)
+                else:
+                    if is_red_alliance:
+                        self.set_colors(RED)
+                    else:
+                        self.set_colors(BLUE)
+            else:
+                self.set_colors(RANDOM)
+
             self.distance_deck.push(distance)
             self.offset_deck.push(offset)
             avg_distance = self.distance_deck.average(precision=1)
             avg_offset = self.offset_deck.average(precision=3)
             field_data.target_in_view = target_in_view
             if target_in_view:
+                print("target is in view")
                 # write to network tables
-                self.nettable.putNumber("distance", avg_distance)
-                self.nettable.putNumber("offset", avg_offset)
+                self.smart_dashboard.putNumber("distance", avg_distance)
+                self.smart_dashboard.putNumber("offset", avg_offset)
                 field_data.distance = avg_distance
                 field_data.offset = avg_offset
                 if offset_direction == -1:
@@ -91,8 +128,9 @@ class Targeting(Process):
                     field_data.is_left = False
                     field_data.is_centered = True
             else:
-                self.nettable.putNumber("distance", -1)
-                self.nettable.putNumber("offset", -1)
+                print("no target")
+                self.smart_dashboard.putNumber("distance", -1)
+                self.smart_dashboard.putNumber("offset", -1)
                 field_data.distance = -1
                 field_data.offset = -1
                 field_data.is_right = False
@@ -100,13 +138,12 @@ class Targeting(Process):
                 field_data.is_centered = False
             self.targeting_queue.put(field_data)
 
-    def process_contours(self, contours, frame):
+    def process_contours(self, contours):
         """
         Helper function to process contours, determine key parameters
         and return results to main() script
 
         :param contours: list of contours as returned from target.get_contours()
-        :param frame: image (frame of video)
         :return: Tuple of target_in_view (Boolean), distance (in same units as
                  TAPE_SEPARATION_DISTANCE), offset (in inches), offset_direction
                  (-1 if bot must move right, 1 if left, 0 if centered)
@@ -114,6 +151,8 @@ class Targeting(Process):
         target_in_view = False
         distance = -1
         display_distance = 0
+        offset = 0
+        offset_direction = 0
         if len(contours) > 1:
             contours, _ = self.sort_contours(contours, method="left-to-right")
             left_contour = None
@@ -196,6 +235,15 @@ class Targeting(Process):
                                               key=lambda b: b[1][i],
                                               reverse=reverse))
         return contours, bounding_boxes
+
+    def get_field_info(self):
+        is_red_alliance = self.fmsinfo.getBoolean('IsRedAlliance')
+        is_game_started = self.smart_dashboard.getBoolean('isGameStarted')
+        return is_red_alliance, is_game_started
+
+    def set_colors(self, color):
+        self.ser.write(str(color).encode())
+        self.ser.write(str("\n").encode())
 
 
 if __name__ == "__main__":
