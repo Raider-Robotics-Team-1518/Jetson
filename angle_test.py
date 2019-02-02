@@ -30,20 +30,19 @@ model_points = np.array([
     (576, -480, 0)
 ], dtype="double")
 
-# {'p1': 6.000000000000001e-05, 'p2': 0.0, 'k1': -2e-06, 'k2': 0.0, 'fl': 2.0, 'center_y': 300.0, 'center_x': 400.0}
-
-
+# CAMERA/LENS PARAMETERS FOR FIELD FLATTENING
 dist_coeff = np.zeros((4, 1), np.float64)
 dist_coeff[0, 0] = -2e-06
 dist_coeff[1, 0] = 0.0
-dist_coeff[2, 0] = 6e-05
+dist_coeff[2, 0] = 6e-06
 dist_coeff[3, 0] = 0.0
 
 cam_matrix = np.eye(3, dtype=np.float32)
 cam_matrix[0, 2] = 400.0
 cam_matrix[1, 2] = 300.0
-cam_matrix[0, 0] = 2   # define focal length x
-cam_matrix[1, 1] = 2   # define focal length y
+cam_matrix[0, 0] = 2
+cam_matrix[1, 1] = 2
+
 
 LOWER = 60         # HSV lower hue color
 UPPER = 100        # HSV upper hue color
@@ -56,6 +55,7 @@ TARGET_ASPECT_RATIO = 0.40
 target = rv.Target()
 target.set_color_range(lower=(LOWER, 100, 100), upper=(UPPER, 255, 255))
 
+
 def main():
     source = "http://10.15.18.100/mjpg/video.mjpg"
     vs = rv.get_video_stream(source)
@@ -65,9 +65,10 @@ def main():
         frame = vs.read_frame()
         frame = rv.flatten(frame, cam_matrix, dist_coeff)
         contours = target.get_contours(frame)
-        target_in_view, distance, angle, lr_angle = process_contours(contours,
-                                                                     frame,
-                                                                     show_preview=True)
+        target_in_view, distance, bot_angle, lr_angle = process_contours(contours,
+                                                                         frame,
+                                                                         show_preview=True)
+        print("bot_angle: {}".format(bot_angle))
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
             cv2.destroyAllWindows()
@@ -135,20 +136,24 @@ def process_contours(contours, frame, show_preview=False):
             point_spacing = right_leftmost[0] - left_rightmost[0]
             # Distance from formula: D’ = (W x F) / P
             distance = TAPE_SEPARATION_DISTANCE * FOCAL_LENGTH / point_spacing
-            bot_angle, imgpts = estimate_robot_angle(left_leftmost, left_rightmost, left_topmost, left_bottommost, right_leftmost, right_rightmost, right_topmost, right_bottommost)
+            bot_angle = estimate_robot_angle(left_leftmost,
+                                             left_rightmost,
+                                             left_topmost,
+                                             left_bottommost,
+                                             right_leftmost,
+                                             right_rightmost,
+                                             right_topmost,
+                                             right_bottommost)
             lr_angle = (left_angle, right_angle)
         if show_preview:
-            if imgpts is not None:
-                origin = tuple([400, 300])
-                frame = cv2.line(frame, origin, tuple(imgpts[0][0].ravel()), (255, 0, 0), 4)
-                frame = cv2.line(frame, origin, tuple(imgpts[0][1].ravel()), (0, 255, 0), 4)
-                frame = cv2.line(frame, origin, tuple(imgpts[0][2].ravel()), (0, 0, 255), 4)
             show_preview_window(frame, left_contour, right_contour)
 
     return target_in_view, distance, bot_angle, lr_angle
 
 
-def estimate_robot_angle(left_leftmost, left_rightmost, left_topmost, left_bottommost, right_leftmost, right_rightmost, right_topmost, right_bottommost):
+def estimate_robot_angle(left_leftmost, left_rightmost, left_topmost,
+                         left_bottommost, right_leftmost, right_rightmost,
+                         right_topmost, right_bottommost):
     """
     Estimate the angle at which the robot is facing the targets
 
@@ -167,14 +172,32 @@ def estimate_robot_angle(left_leftmost, left_rightmost, left_topmost, left_botto
         right_bottommost
     ], dtype="double")
 
-    axis = np.float32([[-2, 0, 0], [0, -2, 0], [0, 0, -2]]).reshape(-1, 3)
-    (success, rvec, tvec) = cv2.solvePnP(model_points, image_points, cam_matrix, dist_coeff, flags=cv2.SOLVEPNP_ITERATIVE)
-    imgpts = cv2.projectPoints(axis, rvec, tvec, cam_matrix, dist_coeff)
-    rv0 = rvec[0] * 180/math.pi
-    rv1 = rvec[1] * 180/math.pi
-    rv2 = rvec[2] * 180/math.pi
-    print("RVEC angles: {}, {}, {}".format(rv0, rv1, rv2))
-    return rvec[0]*180/math.pi, imgpts
+    (success, rvec, tvec) = cv2.solvePnP(model_points,
+                                         image_points,
+                                         cam_matrix,
+                                         dist_coeff,
+                                         flags=cv2.SOLVEPNP_ITERATIVE)
+    rmat = cv2.Rodrigues(rvec)[0]
+    print("rmat: {}".format(rmat))
+    cam_pos = -np.matrix(rmat).T * np.matrix(tvec)
+    print("cam_pos: {}".format(cam_pos))
+    P = np.hstack((rmat, tvec))
+    euler_angles_radians = -cv2.decomposeProjectionMatrix(P)[6]
+    yaw = 180 * euler_angles_radians[1, 0] / math.pi
+    pitch = 180 * ((euler_angles_radians[0, 0] + math.pi / 2) *
+                   math.cos(euler_angles_radians[1, 0])) / math.pi
+    roll = 180 * ((-(math.pi / 2) - euler_angles_radians[0, 0]) *
+                  math.sin(euler_angles_radians[1, 0]) +
+                  euler_angles_radians[2, 0]) / math.pi
+    print("pitch, roll, yaw: {}, {}, {}".format(pitch, roll, yaw))
+
+    # imgpts = cv2.projectPoints(axis, rvec, tvec, cam_matrix, dist_coeff)
+    # rv0 = rvec[0] * 180 / math.pi
+    # rv1 = rvec[1] * 180 / math.pi
+    # rv2 = rvec[2] * 180 / math.pi
+    # print("RVEC angles: {}, {}, {}".format(rv0, rv1, rv2))
+    # euler_angles_degrees = 180 * euler_angles_radians/math.pi
+    return 180 * euler_angles_radians / math.pi
 
 
 def sort_contours(contours, method="left-to-right"):
@@ -213,9 +236,5 @@ def show_preview_window(frame, left_contour, right_contour):
     cv2.imshow('CapturedImage', frame)
 
 
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
-
-
