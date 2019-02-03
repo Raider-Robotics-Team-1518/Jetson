@@ -17,24 +17,25 @@ SERVER_ADDRESS = "10.15.18.2"  # IP address of the robot
 # I think we could use 'roborio-XXX-frc.local' instead
 LOWER = 60         # HSV lower hue color
 UPPER = 100        # HSV upper hue color
-TOLERANCE = 4   # angle tolerance, in degrees
+TOLERANCE = 10   # angle tolerance, in degrees
 TAPE_ANGLE = 14.5  # degrees
 ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
 TAPE_SEPARATION_DISTANCE = 8.0  # distance between tape points in inches
-FOCAL_LENGTH = 840     # perceived focal length calculated with distance_calibration.py
+FOCAL_LENGTH = 665     # perceived focal length calculated with distance_calibration.py
 TARGET_ASPECT_RATIO = 0.40  # aspect ratio of tape (2 / 5.5 = 0.36)
 
 # CAMERA/LENS PARAMETERS FOR FIELD FLATTENING
 dist_coeff = np.zeros((4, 1), np.float64)
-dist_coeff[0, 0] = -5e-07
+dist_coeff[0, 0] = -2e-06
 dist_coeff[1, 0] = 0.0
-dist_coeff[2, 0] = 8.5e-05
-dist_coeff[3, 0] = 1.4e-05
+dist_coeff[2, 0] = 6e-06
+dist_coeff[3, 0] = 0.0
+
 cam_matrix = np.eye(3, dtype=np.float32)
-cam_matrix[0, 2] = 320.0
-cam_matrix[1, 2] = 240.0
-cam_matrix[0, 0] = 8   # define focal length x
-cam_matrix[1, 1] = 8   # define focal length y
+cam_matrix[0, 2] = 400.0
+cam_matrix[1, 2] = 300.0
+cam_matrix[0, 0] = 2   # define focal length x
+cam_matrix[1, 1] = 2   # define focal length y
 
 # GLOBAL OBJECT CONFIGURATIONS
 logging.basicConfig(level=logging.DEBUG)  # needed to get logging info from NetworkTables
@@ -65,13 +66,12 @@ def main():
         target_in_view, distance, angle, lr_angle = process_contours(contours,
                                                                      frame,
                                                                      show_preview=True)
-        print(target_in_view)
         distance_deck.push(distance)
         avg_distance = distance_deck.average(precision=1)
-        print(avg_distance)
+        print("Distance: {}".format(avg_distance))
         l_angle_deck.push(lr_angle[0])
         r_angle_deck.push(lr_angle[1])
-        print("L: {}, R: {}".format(l_angle_deck.average(precision=3), r_angle_deck.average(precision=3)))
+        print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
         if target_in_view:
             # write to network tables
             nettable.putNumber("distance", avg_distance)
