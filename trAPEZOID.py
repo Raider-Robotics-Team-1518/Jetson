@@ -1,34 +1,28 @@
 """
-Goal of this script was to determine the bot's angle to the wall by
-comparing the perceived geometry of the tapes to the actual geometry.
+Gets the tape angles and uses that to calculate distance to the targets
 
-The script functions, but does not provide useful information. More
-exploration & research is needed to make this technique work.
-
-rotation vectors are calculated with values like:
-RVEC angles: [179.9179794], [3.32004522], [-0.31692297]
-
-However, rotating the camera does not appreciably change any of those
-or at least not in a way that appears to be proportional to the real
-angle.
-
+Note that the camera will be mounted 11.25" back from the front of the camera
+(including the bumpers).
 """
-
+import argparse
 import cv2
+import logging
+import math
 import numpy as np
 import robovision as rv
-import math
+from networktables import NetworkTables
 
-model_points = np.array([
-    (0, -464, 0),
-    (109, -305, 0),
-    (45, 0, 0),
-    (64, -480, 0),
-    (371, -305, 0),
-    (640, -464, 0),
-    (595, 0, 0),
-    (576, -480, 0)
-], dtype="double")
+# DEFAULT / STARTING VALUES
+SERVER_ADDRESS = "10.15.18.2"  # IP address of the robot
+# I think we could use 'roborio-XXX-frc.local' instead
+LOWER = 60         # HSV lower hue color
+UPPER = 100        # HSV upper hue color
+TOLERANCE = 10   # angle tolerance, in degrees
+TAPE_ANGLE = 14.5  # degrees
+ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
+TAPE_SEPARATION_DISTANCE = 14.625  # distance between tape points in inches
+FOCAL_LENGTH = 185     # perceived focal length calculated with distance_calibration.py
+TARGET_ASPECT_RATIO = 0.40  # aspect ratio of tape (2 / 5.5 = 0.36)
 
 # CAMERA/LENS PARAMETERS FOR FIELD FLATTENING
 dist_coeff = np.zeros((4, 1), np.float64)
@@ -40,35 +34,71 @@ dist_coeff[3, 0] = 0.0
 cam_matrix = np.eye(3, dtype=np.float32)
 cam_matrix[0, 2] = 400.0
 cam_matrix[1, 2] = 300.0
-cam_matrix[0, 0] = 2
-cam_matrix[1, 1] = 2
+cam_matrix[0, 0] = 2   # define focal length x
+cam_matrix[1, 1] = 2   # define focal length y
 
-
-LOWER = 60         # HSV lower hue color
-UPPER = 100        # HSV upper hue color
-TOLERANCE = 10   # angle tolerance, in degrees
-TAPE_ANGLE = 14.5  # degrees
-TAPE_SEPARATION_DISTANCE = 8.0  # distance between tape points in inches
-ANGLE_ADJUSTMENT = 0.8  # calculated angle is off by small amount
-FOCAL_LENGTH = 840     # perceived focal length calculated with distance_calibration.py
-TARGET_ASPECT_RATIO = 0.40
+qlogging.basicConfig(level=logging.DEBUG)  # needed to get logging info from NetworkTables
+NetworkTables.initialize(server=SERVER_ADDRESS)
+nettable = NetworkTables.getTable("SmartDashboard")
 target = rv.Target()
 target.set_color_range(lower=(LOWER, 100, 100), upper=(UPPER, 255, 255))
 
 
 def main():
-    source = "http://10.15.18.100/mjpg/video.mjpg"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-s", "--source", required=False,
+                    help="Video source, e.g. the webcam number")
+    args = vars(ap.parse_args())
+    source = args["source"]
+    if source is None or source == "":
+        source = "http://10.15.18.100/mjpg/video.mjpg"
     vs = rv.get_video_stream(source)
     vs.start()
     cv2.namedWindow('CapturedImage', cv2.WINDOW_NORMAL)
+    distance_deck = rv.Deck(maxlen=5)
+    l_angle_deck = rv.Deck(maxlen=5)
+    r_angle_deck = rv.Deck(maxlen=5)
     while True:
         frame = vs.read_frame()
+        raw = frame.copy()
         frame = rv.flatten(frame, cam_matrix, dist_coeff)
         contours = target.get_contours(frame)
         target_in_view, distance, bot_angle, lr_angle = process_contours(contours,
-                                                                         frame,
-                                                                         show_preview=True)
-        print("bot_angle: {}".format(bot_angle))
+                                                                     frame,
+                                                                     show_preview=True)
+        if True or target_in_view:
+            gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+            edged = cv2.Canny(gray, 50, 255, apertureSize = 3)
+            lines = cv2.HoughLines(edged, 1, np.pi / 180, 50)
+            if lines is not None and len(lines):
+                for line in lines:
+                    rho, theta = line[0]
+                    a = np.cos(theta)
+                    b = np.sin(theta)
+                    x0 = a * rho
+                    y0 = b * rho
+                    x1 = int(x0 + 100 * (-b))
+                    y1 = int(y0 + 100 * (a))
+                    x2 = int(x0 - 100 * (-b))
+                    y2 = int(y0 - 100 * (a))
+                    cv2.line(raw, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.imshow("Canny", raw)
+
+        distance_deck.push(distance)
+        avg_distance = distance_deck.average(precision=1)
+        # print("Distance: {}".format(avg_distance))
+        # print("Bot angle: {}".format(bot_angle))
+        l_angle_deck.push(lr_angle[0])
+        r_angle_deck.push(lr_angle[1])
+        # print("Angles: L: {}, R: {}".format(l_angle_deck.average(precision=1), r_angle_deck.average(precision=1)))
+        if target_in_view:
+            # write to network tables
+            nettable.putNumber("distance", avg_distance)
+            nettable.putNumber("angle", bot_angle)
+        else:
+            nettable.putNumber("distance", -1)
+            nettable.putNumber("angle", 0)
+        # wait for Esc or q key and then exit
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
             cv2.destroyAllWindows()
@@ -99,8 +129,6 @@ def process_contours(contours, frame, show_preview=False):
         left_angle = 0
         right_angle = 0
         left_center = (0, 0)
-        right_center = (0, 0)
-        imgpts = None
         for cnt in contours:
             angle = target.get_skew_angle(cnt)
             _, _, w, h = target.get_rectangle(cnt)
@@ -125,7 +153,6 @@ def process_contours(contours, frame, show_preview=False):
                     math.isclose(angle, -TAPE_ANGLE, abs_tol=TOLERANCE):
                 right_contour = cnt
                 right_angle = angle - ANGLE_ADJUSTMENT
-                right_center = center
         if left_contour is not None and \
                 right_contour is not None and \
                 math.isclose(left_angle + abs(right_angle), TAPE_ANGLE * 2, abs_tol=TOLERANCE):
@@ -133,17 +160,11 @@ def process_contours(contours, frame, show_preview=False):
             left_leftmost, left_rightmost, left_topmost, left_bottommost = target.get_extreme_points(left_contour)
             # return leftmost, rightmost, topmost, bottommost
             right_leftmost, right_rightmost, right_topmost, right_bottommost = target.get_extreme_points(right_contour)
-            point_spacing = right_leftmost[0] - left_rightmost[0]
+            point_spacing = abs(left_topmost[1] - left_leftmost[1])
             # Distance from formula: D’ = (W x F) / P
             distance = TAPE_SEPARATION_DISTANCE * FOCAL_LENGTH / point_spacing
-            bot_angle = estimate_robot_angle(left_leftmost,
-                                             left_rightmost,
-                                             left_topmost,
-                                             left_bottommost,
-                                             right_leftmost,
-                                             right_rightmost,
-                                             right_topmost,
-                                             right_bottommost)
+            bot_angle = estimate_robot_angle(left_leftmost, left_topmost, right_rightmost)
+
             lr_angle = (left_angle, right_angle)
         if show_preview:
             show_preview_window(frame, left_contour, right_contour)
@@ -151,53 +172,21 @@ def process_contours(contours, frame, show_preview=False):
     return target_in_view, distance, bot_angle, lr_angle
 
 
-def estimate_robot_angle(left_leftmost, left_rightmost, left_topmost,
-                         left_bottommost, right_leftmost, right_rightmost,
-                         right_topmost, right_bottommost):
-    """
-    Estimate the angle at which the robot is facing the targets
+def estimate_robot_angle(left_leftmost, left_topmost, right_rightmost):
+    nominal_ratio = (14.625 / 5.375) * 1.2  # * 32.79
 
-    :param left_angle: Apparent angle of the left target tape yee haw
-    :param right_angle: Apparent angle of the right target tape haw yee
-    :return: angle (robot angle to targets, degrees) yaw hee
-    """
-    image_points = np.array([
-        left_leftmost,
-        left_rightmost,
-        left_topmost,
-        left_bottommost,
-        right_leftmost,
-        right_rightmost,
-        right_topmost,
-        right_bottommost
-    ], dtype="double")
+    height = abs(left_topmost[1] - left_leftmost[1])
+    width = abs(right_rightmost[0] - left_leftmost[0])
+    # print("width, height", width, height)
+    # print("nominal ratio", nominal_ratio)
+    ratio = (width / height) / nominal_ratio
+    if ratio > 1.0:
+        ratio = 1
+    # print(ratio)
+    alpha = math.acos(ratio)
+    alpha = alpha * 180 / math.pi
 
-    (success, rvec, tvec) = cv2.solvePnP(model_points,
-                                         image_points,
-                                         cam_matrix,
-                                         dist_coeff,
-                                         flags=cv2.SOLVEPNP_ITERATIVE)
-    rmat = cv2.Rodrigues(rvec)[0]
-    print("rmat: {}".format(rmat))
-    cam_pos = -np.matrix(rmat).T * np.matrix(tvec)
-    print("cam_pos: {}".format(cam_pos))
-    P = np.hstack((rmat, tvec))
-    euler_angles_radians = -cv2.decomposeProjectionMatrix(P)[6]
-    yaw = 180 * euler_angles_radians[1, 0] / math.pi
-    pitch = 180 * ((euler_angles_radians[0, 0] + math.pi / 2) *
-                   math.cos(euler_angles_radians[1, 0])) / math.pi
-    roll = 180 * ((-(math.pi / 2) - euler_angles_radians[0, 0]) *
-                  math.sin(euler_angles_radians[1, 0]) +
-                  euler_angles_radians[2, 0]) / math.pi
-    print("pitch, roll, yaw: {}, {}, {}".format(pitch, roll, yaw))
-
-    # imgpts = cv2.projectPoints(axis, rvec, tvec, cam_matrix, dist_coeff)
-    # rv0 = rvec[0] * 180 / math.pi
-    # rv1 = rvec[1] * 180 / math.pi
-    # rv2 = rvec[2] * 180 / math.pi
-    # print("RVEC angles: {}, {}, {}".format(rv0, rv1, rv2))
-    # euler_angles_degrees = 180 * euler_angles_radians/math.pi
-    return yaw
+    return alpha
 
 
 def sort_contours(contours, method="left-to-right"):
@@ -236,5 +225,5 @@ def show_preview_window(frame, left_contour, right_contour):
     cv2.imshow('CapturedImage', frame)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
