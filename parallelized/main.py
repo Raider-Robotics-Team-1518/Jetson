@@ -24,80 +24,50 @@ FMS reader/writer
     read: match_started, alliance
 """
 import cv2
-import imutils
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Queue, Pipe
+# import our bot-specific classes
+from camstreamer import Camstreamer
+from targeting import Target
 
 
-class CamGrabber(Process):
-    def __init__(self, queue=None, stop_queue=None, **kwargs):
-        super(CamGrabber, self).__init__()
-        self.queue = queue
-        self.stop_queue = stop_queue
-        self.kwargs = kwargs
-
-    def run(self):
-        cam = cv2.VideoCapture(0)
-        keepGoing = True
-        while keepGoing:
-            success, frame = cam.read()
-            if success:
-                frame = imutils.resize(frame, width=320)
-                self.queue.put(frame)
-            else:
-                print("frame fail {}".format(success))
-            if self.stop_queue.empty() is False:
-                stop = self.stop_queue.get()
-                if stop == 1:
-                    print("CamGrabber exiting")
-                    cam.release()
-                    keepGoing = False
-                    break
-
-
-class FrameProcessor(Process):
-    def __init__(self, queue=None, stop_queue=None, **kwargs):
-        super(FrameProcessor, self).__init__()
-        self.queue = queue
-        self.stop_queue = stop_queue
-        self.kwargs = kwargs
-
-    def run(self):
-        keepGoing = True
-        while keepGoing:
-            if self.queue.empty() is False:
-                f = self.queue.get()
-                if f is not None:
-                    adjusted = cv2.addWeighted(f,
-                                               1. + float(40) / 127.,
-                                               f,
-                                               float(1),
-                                               float(60) - float(40))
-
-                    cv2.imshow("Adjusted", adjusted)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("FrameProcessor exiting")
-                self.stop_queue.put(1)
-                cv2.destroyAllWindows()
-                keepGoing = False
-                break
-
+# CONSTANTS
+CAMERA_SOURCE = "http://10.15.18.100/mjpg/video.mjpg"
+LOWER_HSV = 60
+UPPER_HSV = 100
+stop_pipes = []
 
 if __name__ == "__main__":
-    q = Queue()
-    cg_stop_queue = Queue()
-    stop_queue = Queue()
-    cg = CamGrabber(queue=q, stop_queue=cg_stop_queue)
-    fp = FrameProcessor(queue=q, stop_queue=stop_queue)
-    cg.start()
-    fp.start()
+    # create a series of pipes over which we can send the
+    # shut down signal; pipes are one-way with an in and
+    # and out ends (here called writer and reader, respectively)
+    cs_reader, cs_writer = Pipe(duplex=False)
+    nt_reader, nt_writer = Pipe(duplex=False)
+    trgt_reader, trgt_writer = Pipe(duplex=False)
+    stop_pipes.append(cs_writer)
+    stop_pipes.append(nt_writer)
+    stop_pipes.append(trgt_writer)
+    # Create a queues for 2-way comm between the targeting
+    # and camstreamer queues
+    targeting_queue = Queue()
+
+    camstreamer_process = Camstreamer(targeting_queue=targeting_queue, stop_pipe=cs_reader)
+    target_process = Target(targeting_queue=targeting_queue,
+                            stop_pipe=trgt_reader,
+                            source=CAMERA_SOURCE,
+                            lower_hsv=LOWER_HSV,
+                            upper_hsv=UPPER_HSV)
+
+    camstreamer_process.start()
+    target_process.start()
     while True:
-        if stop_queue.empty() is False:
-            stop = stop_queue.get()
-            if stop == 1:
-                print("Signaling CamGrabber to exit")
-                cg.stop_queue.put(1)
-                fp.terminate()
-                time.sleep(2)
-                cg.terminate()
-                exit()
+        # wait for Esc or q key and then exit
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27 or key == ord("q"):
+            cv2.destroyAllWindows()
+            for pipe in stop_pipes:
+                pipe.put("stop")
+            time.sleep(2)
+            camstreamer_process.terminate()
+            target_process.terminate()
+            exit()
