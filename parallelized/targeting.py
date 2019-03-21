@@ -22,7 +22,7 @@ TAPE_HEIGHT = 8.0              # distance between tape points in inches
 FOCAL_LENGTH = 681             # perceived focal length calculated with distance_calibration.py
 TARGET_ASPECT_RATIO = 0.40     # aspect ratio of tape (2 / 5.5 = 0.36)
 FOV = 67                       # actual camera FOV
-CAMERA_SETBACK = 22.5          # how far back the camera is mounted
+CAMERA_SETBACK = 11.25         # how far back the camera is mounted
 CENTER_TOLERANCE = 10          # tolerance for being centered, in pixels
 DECK_LENGTH = 5                # deque length for rolling average
 
@@ -48,7 +48,7 @@ cam_matrix[1, 1] = 2   # define focal length y
 
 
 class Targeting(Process):
-    def __init__(self, targeting_queue=None, stop_pipe=None, source="http://10.15.18.11/mjpg/video.mjpg",
+    def __init__(self, targeting_queue=None, stop_pipe=None, source="http://10.15.18.100/mjpg/video.mjpg",
                  lower_hsv=60, upper_hsv=100):
         super(Targeting, self).__init__()
         self.targeting_queue = targeting_queue
@@ -58,7 +58,7 @@ class Targeting(Process):
         self.fmsinfo = NetworkTables.getTable("FMSInfo")
         self.distance_deck = rv.Deck(maxlen=5)
         self.offset_deck = rv.Deck(maxlen=5)
-        self.camera = cv2.VideoCapture("http://10.15.18.11/mjpg/video.mjpg")
+        self.camera = cv2.VideoCapture("http://10.15.18.100/mjpg/video.mjpg")
         # self.vs = rv.get_video_stream(source)
         # self.vs.start()
         self.target = rv.Target()

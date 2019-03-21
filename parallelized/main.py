@@ -32,7 +32,7 @@ from targeting import Targeting
 
 
 # CONSTANTS
-CAMERA_SOURCE = "http://10.15.18.11/mjpg/video.mjpg"
+CAMERA_SOURCE = "http://10.15.18.100/mjpg/video.mjpg"
 LOWER_HSV = 60
 UPPER_HSV = 100
 stop_pipes = []
